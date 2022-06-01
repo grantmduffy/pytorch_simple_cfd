@@ -4,6 +4,7 @@ from matplotlib.colors import hsv_to_rgb
 import torch
 from tqdm import tqdm
 import cv2
+from matplotlib.colors import ListedColormap
 
 
 K_dx = torch.Tensor([
@@ -75,32 +76,45 @@ def temp_vis(T):
     return img[..., ::-1]
 
 
-def humid_vis(W, precip):
+c = np.array([163, 183, 209, 256])[None, :] * np.ones((256, 1)) / 256
+c[:, 3] = np.linspace(0, 1, 256)
+rain_cmap = ListedColormap(c)
+
+
+def humid_vis(W, precip, T):
     cmap = plt.get_cmap('Blues')
     cmap_precip = plt.get_cmap('gnuplot2')
-    val = W[0, 0] / W.max()
-    img = (cmap(val ** 0.2) * 255).astype(np.uint8)
+    humidity = W[0, 0] / (T[0, 0] + 1e-6)
+    img = cmap(1 - humidity)
+    rain = np.cumsum(precip[0, 0], axis=0)
+    # print(float(precip.max()), float(rain.max()), float(W.max()), float(T.max()))
+    rain /= 1e-5
     val = precip[0, 0] / precip.max()
     m_precip = val > 0.05
-    img_precip = (cmap_precip(val ** 0.5) * 255).astype(np.uint8)
-    img[m_precip] = img_precip[m_precip]
-    return img[..., ::-1]
+    img_precip = cmap_precip(val ** 0.5)
+    # img[m_precip] = img_precip[m_precip]
+    img_rain = rain_cmap(rain)
+    img[..., :3] = img[..., :3] * (1 - img_rain[..., [-1]]) + img_rain[..., :3] * img_rain[..., [-1]]
+    return (img * 255).astype(np.uint8)[..., ::-1]
 
 
 # Setup arrays and outputs
 n_width, n_height = 500, 100
-K_evap = 0.01
-H_vap = 0.1
-roof = torch.linspace(0, 1, n_height) ** 0.02
+K_evap = 0.001
+H_vap = 0.10
+roof = torch.linspace(0, 1, n_height) ** 0.05
 U = torch.zeros((1, 2, n_height, n_width))
 T = torch.zeros((1, 1, n_height, n_width))
 T[0, 0] = torch.from_numpy(np.random.normal(0, 0.03, (n_height, n_width)) ** 2)
 W = torch.zeros((1, 1, n_height, n_width))
 
-out = cv2.VideoWriter('humidity.mp4', cv2.VideoWriter_fourcc(*'XVID'), 30.0, (U.shape[3], U.shape[2]))
+out_temp = cv2.VideoWriter('flow_temp.mp4', cv2.VideoWriter_fourcc(*'XVID'), 30.0, (U.shape[3], U.shape[2]))
+out_vel = cv2.VideoWriter('flow_vel.mp4', cv2.VideoWriter_fourcc(*'XVID'), 30.0, (U.shape[3], U.shape[2]))
+out_vap = cv2.VideoWriter('flow_vap.mp4', cv2.VideoWriter_fourcc(*'XVID'), 30.0, (U.shape[3], U.shape[2]))
+
 cont_hist = []
 
-for i in tqdm(range(3000)):
+for i in tqdm(range(5000)):
 
     # Set boundary conditions
     U[:, :, [0, -1]] = 0
@@ -110,12 +124,14 @@ for i in tqdm(range(3000)):
     T[0, 0, -1] += 0.005
 
     # Surface Evaporation
-    W[0, 0, -1] += K_evap * (T[0, 0, -1] - W[0, 0, -1])
-    T[0, 0, -1] -= H_vap * K_evap * (T[0, 0, -1] - W[0, 0, -1])
+    evap = K_evap * (T[0, 0, -1] - W[0, 0, -1])
+    W[0, 0, -1] += evap
+    T[0, 0, -1] -= H_vap * evap
 
     # Precipitation
     precip = np.maximum(W - T, 0)
     W -= precip
+    T += H_vap * precip
 
     # Navier Stokes for incompressible inviscid flow
     du_dx = torch.conv2d(U[:, [0]], torch.broadcast_to(K_dx, (1, 1, 3, 3)), padding='same')
@@ -153,10 +169,9 @@ for i in tqdm(range(3000)):
 
     # Write to video
     if i % 5 == 0:
-        # img = (flow_vis(U) * 255).astype(np.uint8)
-        # img = temp_vis(T)
-        img = humid_vis(W, precip)
-        out.write(img)
+        out_vel.write((flow_vis(U) * 255).astype(np.uint8))
+        out_temp.write(temp_vis(T))
+        out_vap.write(humid_vis(W, precip, T))
 
         # plt.figure()
         # plt.title('Water')
@@ -166,7 +181,9 @@ for i in tqdm(range(3000)):
         # plt.imshow(T[0, 0])
         # plt.show()
 
-out.release()
+out_temp.release()
+out_vel.release()
+out_vap.release()
 
 # Plot continuity convergence
 cont_hist = np.array(cont_hist)
