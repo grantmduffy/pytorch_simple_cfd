@@ -66,13 +66,16 @@ def flow_vis(U):
     hsv[..., 1] = vel / vel.max()
     hsv[..., 2] = 1.0
     rgb = hsv_to_rgb(hsv)
+    rgb[land] *= 0.5
     return rgb
 
 
 def temp_vis(T):
     cmap = plt.get_cmap('inferno')
     val = T[0, 0] / T.max()
-    img = (cmap(val) * 255).astype(np.uint8)
+    img = cmap(val)
+    img[land] *= 0.5
+    img = (img * 255).astype(np.uint8)
     return img[..., ::-1]
 
 
@@ -95,18 +98,31 @@ def humid_vis(W, precip, T):
     # img[m_precip] = img_precip[m_precip]
     img_rain = rain_cmap(rain)
     img[..., :3] = img[..., :3] * (1 - img_rain[..., [-1]]) + img_rain[..., :3] * img_rain[..., [-1]]
+    img[land, :] = 0.0
     return (img * 255).astype(np.uint8)[..., ::-1]
+
+
+def random_land(n_width, n_height):
+    h = np.cumsum(np.random.randint(-2, 3, 500))[None, :]
+    y = np.arange(100)[::-1, None]
+    M = y <= h
+    return M
 
 
 # Setup arrays and outputs
 n_width, n_height = 500, 100
 K_evap = 0.001
 H_vap = 0.10
-roof = torch.linspace(0, 1, n_height) ** 0.05
+roof = torch.linspace(0, 1, 70) ** 0.05
 U = torch.zeros((1, 2, n_height, n_width))
 T = torch.zeros((1, 1, n_height, n_width))
-T[0, 0] = torch.from_numpy(np.random.normal(0, 0.03, (n_height, n_width)) ** 2)
+T[0, 0] = torch.from_numpy(np.random.normal(0, 0.01, (n_height, n_width)) ** 2)
 W = torch.zeros((1, 1, n_height, n_width))
+land = random_land(n_width, n_height)
+
+plt.figure()
+plt.imshow(land)
+plt.show()
 
 out_temp = cv2.VideoWriter('flow_temp.mp4', cv2.VideoWriter_fourcc(*'XVID'), 30.0, (U.shape[3], U.shape[2]))
 out_vel = cv2.VideoWriter('flow_vel.mp4', cv2.VideoWriter_fourcc(*'XVID'), 30.0, (U.shape[3], U.shape[2]))
@@ -114,14 +130,19 @@ out_vap = cv2.VideoWriter('flow_vap.mp4', cv2.VideoWriter_fourcc(*'XVID'), 30.0,
 
 cont_hist = []
 
-for i in tqdm(range(5000)):
+for i in tqdm(range(3000)):
 
     # Set boundary conditions
     U[:, :, [0, -1]] = 0
     U[:, :, 0, [0, -1]] = 0
-    U[:, :, 1, [0, -1]] = 0
+    U[:, :, 1, [0, -1]] = 1.0
+    U[:, :, land] = 0
     T[0, 0, :len(roof)] *= roof[:, None]
-    T[0, 0, -1] += 0.005
+
+    # Surface heating
+    i_surface = np.argmax(land, axis=0)
+    i_surface[i_surface == 0] = n_height - 1
+    T[0, 0, i_surface, range(n_width)] += 0.0005
 
     # Surface Evaporation
     evap = K_evap * (T[0, 0, -1] - W[0, 0, -1])
