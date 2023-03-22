@@ -48,8 +48,6 @@ def solve_continuity(U, threshold=0.0001, max_n=100):
         dv_ddy = torch.conv2d(U[:, [1]], torch.broadcast_to(K_ddy, (1, 1, 3, 3)), padding='same')
         du_dc = torch.conv2d(du_ddx + dv_dxy, torch.broadcast_to(K_smooth, (1, 1, 3, 3)), padding='same')
         dv_dc = torch.conv2d(dv_ddy + du_dxy, torch.broadcast_to(K_smooth, (1, 1, 3, 3)), padding='same')
-        # du_dc = du_ddx + dv_dxy
-        # dv_dc = dv_ddy + du_dxy
         U[:, [0]] += du_dc
         U[:, [1]] += dv_dc
         err = (du_dc ** 2 + dv_dc ** 2).sum()
@@ -103,14 +101,14 @@ def humid_vis(W, precip, T):
 
 
 def random_land(n_width, n_height):
-    h = np.cumsum(np.random.randint(-2, 3, 500))[None, :]
-    y = np.arange(100)[::-1, None]
-    M = y <= h
-    return M
+    h = np.cumsum(np.random.randint(-2, 3, n_width))[None, :]
+    y = np.arange(n_height)[::-1, None]
+    mask = y <= h
+    return mask
 
 
 # Setup arrays and outputs
-n_width, n_height = 500, 100
+n_width, n_height = 200, 300
 K_evap = 0.001
 H_vap = 0.10
 roof = torch.linspace(0, 1, 70) ** 0.05
@@ -142,7 +140,8 @@ for i in tqdm(range(3000)):
     # Surface heating
     i_surface = np.argmax(land, axis=0)
     i_surface[i_surface == 0] = n_height - 1
-    T[0, 0, i_surface, range(n_width)] += 0.0005
+    # T[0, 0, i_surface, range(n_width)] += 0.0005
+    T[0, 0, -1, i_surface == n_height - 1] += 0.001
 
     # Surface Evaporation
     evap = K_evap * (T[0, 0, -1] - W[0, 0, -1])
